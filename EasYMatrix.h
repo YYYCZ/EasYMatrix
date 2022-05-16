@@ -79,7 +79,7 @@
 * 
 * 
 * 更新日志 | 2021 - 10 - 11 | By YYYCZ
-* 1.增加矩阵的 逐项相乘（Mutiply）、逐项相除（\）、逐项相余（Surplus）
+* 1.增加矩阵的 逐项相乘（Multiply）、逐项相除（\）、逐项相余（Surplus）
 * 2.加入了 FlipLeftAndRight、FlipUpAndDown、Rotate90 的方法（左右翻转、上下翻转、逆时针旋转任意个90度[默认一个]）
 * 3.阈值函数 Threshold 第一个参数改为初始化列表
 * 4.加入自动阈值函数 AutoThreshold
@@ -159,6 +159,13 @@
 * 更新日志 | 2021 - 12 - 09 | By YYYCZ
 * 1.完善 Householder 变换相关操作
 * 2.完善索引对 _Ip
+* 
+* 
+* 
+* 更新日志 | 2022 - 01 - 07 | By YYYCZ
+* 1.修复了 Swap 的 Bug
+* 2.加入了 CholeskyFactorization
+* 3.高斯-若当消元可自选是否是上三角矩阵
 * 
 * 
 * 
@@ -746,7 +753,7 @@ namespace EasYMatrix
 
 		//矩阵逐项相乘
 		template<class _RV>
-		_Self& Mutiply(const Matrix<_RV>& _matrix_);
+		_Self& Multiply(const Matrix<_RV>& _matrix_);
 
 		//矩阵逐项相除
 		template<class _RV>
@@ -856,11 +863,14 @@ namespace EasYMatrix
 		_Self& GaussianElimination();
 
 		//让矩阵进行高斯-若当消元
-		_Self& GaussJordanElimination();
+		_Self& GaussJordanElimination(bool is_upper = false);
 
 		//让矩阵进行 LU 分解
 		//注意：返回的是 L 的逆矩阵 和 U 矩阵
 		void LUDecomposition(_NSelf& _Linv_, _NSelf& _U_) const;
+
+		//让矩阵进行 Cholesky 分解
+		void CholeskyFactorization(_NSelf& _L_) const;
 
 	public:		/* QR分解 */
 
@@ -1465,15 +1475,18 @@ namespace EasYMatrix
 
 		_Pt* temp_form = this->form;
 		size_t temp_row = this->row,
-			temp_column = this->column;
+			temp_column = this->column,
+			temp_capacity = this->capacity;
 
 		this->form = reinterpret_cast<_Pt*>(_matrix_.form);
 		this->row = _matrix_.row;
 		this->column = _matrix_.column;
+		this->capacity = _matrix_.capacity;
 
 		_matrix_.form = reinterpret_cast<_RV*>(temp_form);
 		_matrix_.row = temp_row;
 		_matrix_.column = temp_column;
+		_matrix_.capacity = temp_capacity;
 
 		return *this;
 	}
@@ -3027,17 +3040,17 @@ namespace EasYMatrix
 
 	//矩阵逐项相乘
 	EasYMatrix_Head(template<class _RV> inline EMSelf _Self&)
-		Mutiply(const Matrix<_RV>& _matrix_)
+		Multiply(const Matrix<_RV>& _matrix_)
 	{
 		return Calculate<_RV>(_matrix_, [](_Ty& a, const _RV& b) {a *= b; });
 	}
 
 	template<class _Tt, class _RV>
-	inline auto Mutiply(const Matrix<_Tt>& _matrix1_, const Matrix<_RV>& _matrix2_)
+	inline auto Multiply(const Matrix<_Tt>& _matrix1_, const Matrix<_RV>& _matrix2_)
 	{
 		Matrix<decltype(typename remove_reference_wrapper<_Tt>::type() * typename remove_reference_wrapper<_RV>::type())>
 			_result = _matrix1_;
-		return _result.Mutiply(_matrix2_);
+		return _result.Multiply(_matrix2_);
 	}
 
 	//矩阵逐项相除
@@ -3709,7 +3722,7 @@ namespace EasYMatrix
 
 	//让矩阵进行高斯若当消元
 	EasYMatrix_Head(EMSelf _Self&)
-		GaussJordanElimination()
+		GaussJordanElimination(bool is_upper)
 	{
 		//获取矩阵某一行的首元素所在位置
 		auto get_first_of_row = [&](size_t _row_) -> size_t
@@ -3721,7 +3734,8 @@ namespace EasYMatrix
 		};
 
 		//第一步 - 进行高斯消元
-		this->GaussianElimination();
+		if(!is_upper)
+			this->GaussianElimination();
 
 		//第二步 - 将每一行首元素置1
 		size_t i = 0;
@@ -3770,6 +3784,62 @@ namespace EasYMatrix
 
 		//第二步 - 高斯消元
 		B.GaussianElimination();
+	}
+
+	//让矩阵进行 Cholesky 分解
+	EasYMatrix_Head(void) 
+		CholeskyFactorization(_NSelf& _L_) const
+	{
+		//检查是否为对称阵
+		//检查对角元素是否为0
+#ifdef _DEBUG
+		_DebugError_(row != column, "CholeskyFactorization", "The matrix must be square!");
+		{
+			for (size_t i = 0; i < row; i++)
+				for (size_t j = (i + 1); j < column; j++)
+					if (abs((*this)(i, j) - (*this)(j, i)) > 1e-6)
+#ifdef _IOSTREAM_
+						std::cerr << "EasYMatrix - CholeskyFactorization - The matrix is asymmetric within the error range!\n"
+						<< "The (" << i << "," << j << ") is " << (*this)(i, j)
+						<< ".\nThe (" << j << "," << i << ") is " << (*this)(j, i) << "." << std::endl,
+#endif
+						throw 1e-6;
+
+			for (size_t i = 0; i < row; i++)
+				if ((*this)(i, i) == _NSelf::_Zero_)
+#ifdef _IOSTREAM_
+					std::cerr << "EasYMatrix - CholeskyFactorization - Diagonal elements can not be zero!\n"
+					<< "The (" << i << "," << i << ") is " << (*this)(i, i) << "." << std::endl,
+#endif
+					throw (*this)(i, i);
+		}
+#endif
+
+		const size_t _Dim = this->Rows();
+		
+		//初始化矩阵 _L_
+		_L_.Reshape(_Dim, _Dim);
+		for (size_t i = 0; i < _Dim; ++i)
+		{
+			for (size_t j = 0; j < _Dim; ++j)
+			{
+				if (i >= j) _L_(i, j) = (*this)(i, j);
+				else _L_(i, j) = _NSelf::_Zero_;
+			}
+		}
+
+		//对 L 进行楚列斯基分解
+		for (size_t j = 0; j < _Dim; ++j)
+		{
+			//为零，说明线性相关，跳出
+			if (_L_(j, j) == _NSelf::_Zero_) continue;
+			_L_(j, j) = sqrt(_L_(j, j));
+			for (size_t i = j + 1; i < _Dim; ++i)
+				_L_(i, j) /= _L_(j, j);
+			for (size_t k = j + 1; k < _Dim; ++k)
+				for (size_t i = k; i < _Dim; ++i)
+					_L_(i, k) -= _L_(i, j) * _L_(k, j);
+		}
 	}
 
 	//Gram - Schmidt 正交化 （对列向量）
